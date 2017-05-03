@@ -94,14 +94,16 @@ class HostUnderNAT(threading.Thread):
         if old_data is not None:
             del old_data
 
-    def on_tunnel_established(self, sock, waiting_id):
+    def on_tunnel_established(self, sock, waiting_id, cached_tcp_data):
         pair = self.__get_waiting_sock(waiting_id)
         if pair is not None:
             forwarding = common.TcpForwarding(waiting_id)
             forwarding.sck_side_A = sock
+            if len(cached_tcp_data):
+                forwarding.cached_data_from_A = cached_tcp_data
             forwarding.sck_side_B = pair[0]
             if pair[1] is not None:
-                sock.sendall(pair[1])
+                forwarding.cached_data_from_B = pair[1]
             forwarding.start()
         else:
             common.safe_close_socket(sock)
@@ -157,15 +159,13 @@ class HostUnderNAT(threading.Thread):
             data = common.recv(self.base_sck, common.BUFFER_SIZE)
             if len(data):
                 text = self.data_from_host + data
-                lines = text.split(';')
-                if len(lines) > 1:
-                    self.data_from_host = lines[-1]
-                    for i in range(len(lines) - 1):
-                        line = lines[i]
-                        action, params = common.parse_line(line)
-                        action = action.lower()
-                        if actions.has_key(action):
-                            actions[action](params)
+                while True:
+                    action, params, text = common.get_action(text)
+                    if action is None:
+                        break
+                    if actions.has_key(action):
+                        actions[action](params)
+                self.data_from_host = text
             else:
                 # 与host的连接断开
                 self.logger.info(u'与host的连接断开')
@@ -205,7 +205,7 @@ class Proxy(threading.Thread):
         self.sock_reader = {str(self.base_sck):self.on_accept_new_host,
                             str(self.http_sck):self.on_accept_new_http_req,
                             str(self.cmd_sck):self.on_accept_new_command}
-        self.indications = {'register': self.on_register, 'tunnel': self.on_tunnel, 'ping':self.on_ping,
+        self.actions = {'register': self.on_register, 'tunnel': self.on_tunnel, 'ping':self.on_ping,
                             'help': self.on_help, 'h': self.on_help, 'list': self.on_list, 'stop':self.on_stop}
         self.hosts = {}
         self.domain_to_host = {}
@@ -245,15 +245,13 @@ class Proxy(threading.Thread):
         data = common.recv(sck, common.BUFFER_SIZE)
         if len(data):
             text = self.data_of_new_socks[sck_id] + data
-            lines = text.split(';')
-            if len(lines) > 1:
-                self.data_of_new_socks[sck_id] = lines[-1]
-                for i in range(len(lines) - 1):
-                    line = lines[i]
-                    ind, params = common.parse_line(line)
-                    ind = ind.lower()
-                    if self.indications.has_key(ind):
-                        self.indications[ind](sck, params)
+            while True:
+                action, params, text = common.get_action(text)
+                self.data_of_new_socks[sck_id] = text
+                if action is None:
+                    break
+                if self.actions.has_key(action):
+                    self.actions[action](sck, params, text)
         else:
             self.__remove_new_sock(sck)
             common.safe_close_socket(sck)
@@ -270,15 +268,13 @@ class Proxy(threading.Thread):
         data = common.recv(sck, common.BUFFER_SIZE)
         if len(data):
             text = self.data_of_new_socks[sck_id] + data
-            lines = text.split("\r\n")
-            if len(lines) > 1:
-                self.data_of_new_socks[sck_id] = lines[-1]
-                for i in range(len(lines) - 1):
-                    line = lines[i]
-                    ind, params = common.parse_line(line)
-                    ind = ind.lower()
-                    if self.indications.has_key(ind):
-                        self.indications[ind](sck, params)
+            while True:
+                action, params, text = common.get_action(text, "\r\n")
+                self.data_of_new_socks[sck_id] = text
+                if action is None:
+                    break
+                if self.actions.has_key(action):
+                    self.actions[action](sck, params, text)
         else:
             self.__remove_new_sock(sck)
             common.safe_close_socket(sck)
@@ -317,7 +313,7 @@ class Proxy(threading.Thread):
             self.__remove_new_sock(sock)
             common.safe_close_socket(sock)
 
-    def on_register(self, sock, params):
+    def on_register(self, sock, params, extra_data):
         host_name = params[0]
         if self.hosts.has_key(host_name):
             self.hosts[host_name].terminate()
@@ -350,27 +346,27 @@ class Proxy(threading.Thread):
             self.__remove_new_sock(sock)
             common.safe_close_socket(sock)
 
-    def on_tunnel(self, sock, params):
+    def on_tunnel(self, sock, params, extra_data):
         self.logger.info("on tunnel %s" % ' '.join(params))
         host_name = params[0]
         if self.hosts.has_key(host_name):
             waiting_id = ' '.join((params[1], params[2]))
-            self.hosts[host_name].on_tunnel_established(sock, waiting_id)
+            self.hosts[host_name].on_tunnel_established(sock, waiting_id, extra_data)
             self.__remove_new_sock(sock)
         else:
             self.__remove_new_sock(sock)
             common.safe_close_socket(sock)
 
-    def on_ping(self, sock, params):
+    def on_ping(self, sock, params, extra_data):
         sock.sendall("force closed!")
         self.__remove_new_sock(sock)
         common.safe_close_socket(sock)
 
-    def on_stop(self, sock, params):
+    def on_stop(self, sock, params, extra_data):
         sock.sendall("terminating the server now!\r\n")
         self.running.clear()
 
-    def on_help(self, sock, params):
+    def on_help(self, sock, params, extra_data):
         help = '''
 you can type such commands like "help, h, list, stop"
     stop
@@ -382,7 +378,7 @@ you can type such commands like "help, h, list, stop"
 '''
         sock.sendall(help)
 
-    def on_list(self, sock, params):
+    def on_list(self, sock, params, extra_data):
         help = '''
 not implymented yet!
 '''

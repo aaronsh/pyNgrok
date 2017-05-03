@@ -1,4 +1,5 @@
 # -*- coding:utf-8 -*-
+import re
 import threading
 import traceback
 import socket
@@ -15,6 +16,7 @@ import cust_logging
 
 BUFFER_SIZE = 9216
 LOGGER = 'logger'
+word_pattern = re.compile("(\\S+)")
 
 def connect_to(addr, port):
     target = (addr, int(port))
@@ -79,10 +81,20 @@ def set_sock_buff_size(sock):
         logger = logging.getLogger("logger")
         logger.error(traceback.format_exc())
 
-def parse_line(line):
-    line = line.strip() + " "
-    all = line.split(' ')
-    return all[0], all[1:]
+
+def get_action(s, delimiter=';'):
+    idx = s.find(delimiter)
+    if idx == -1:
+        return None,None,s
+    else:
+        remained = s[idx+1:]
+        text = s[:idx]
+        global  word_pattern
+        words = word_pattern.findall(text)
+        if not len(words):
+            return None, None, remained
+        else:
+            return words[0].lower(), words[1:], remained
 
 
 def key_gen():
@@ -135,6 +147,8 @@ class TcpForwarding(threading.Thread):
         self.sck_side_A = None
         self.sck_side_B = None
         self.forwarding = True
+        self.cached_data_from_A = None
+        self.cached_data_from_B = None
 
     def send_all(self, sock, data):
         to_send = len(data)
@@ -148,6 +162,11 @@ class TcpForwarding(threading.Thread):
             logger.info("%s start"%self.getName())
             set_sock_buff_size(self.sck_side_A)
             set_sock_buff_size(self.sck_side_B)
+            #send cached data
+            if self.cached_data_from_A:
+                self.send_all(self.sck_side_B, self.cached_data_from_A)
+            if self.cached_data_from_B:
+                self.send_all(self.sck_side_A, self.cached_data_from_B)
             scks = (self.sck_side_A, self.sck_side_B)
             while self.forwarding:
                 try:

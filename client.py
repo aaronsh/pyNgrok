@@ -27,7 +27,7 @@ class ClientPoint:
         self.url_parser = re.compile("((.*):)?(\d+)")
 
     def main(self):
-        responses = {'pong': self.on_pong, "setup":self.on_setup, "registered":self.on_registered}
+        actions = {'pong': self.on_pong, "setup":self.on_setup, "registered":self.on_registered}
         while True:
             sock = common.connect_to(self.proxy_addr, self.proxy_port)
             if sock is None:
@@ -64,15 +64,14 @@ class ClientPoint:
                             break
                         else:
                             text += data
-                            lines = text.split(';')
-                            if len(lines) > 1:
-                                text = lines[-1]
-                                for i in range(len(lines) - 1):
-                                    line = lines[i]
-                                    cmd, params = common.parse_line(line)
-                                    cmd = cmd.lower()
-                                    if responses.has_key(cmd):
-                                        responses[cmd](sock, params)
+                            while True:
+                                action, params, text = common.get_action(text)
+                                if action is None:
+                                    break
+                                if actions.has_key(action):
+                                    actions[action](sock, params)
+                            
+                                    
             except:
                 self.logger.error(traceback.format_exc())
 

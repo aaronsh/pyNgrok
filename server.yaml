@@ -1,0 +1,13 @@
+proxy_port: 6001
+http_port: 80
+command_port: 6002
+users:
+  pi:
+    tcp:
+    - - 8001
+      - 22
+    - - 22103
+      - 22
+    http:
+    - - ngrok.xxx.com
+      - localhost:8888

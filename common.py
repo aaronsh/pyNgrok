@@ -37,6 +37,7 @@ def connect_to(addr, port):
 def listen_on(port, ip='0.0.0.0'):
     try:
         tcpsock = socket.socket()
+        tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         tcpsock.bind((ip, int(port)))
         tcpsock.listen(500)
         set_sock_buff_size(tcpsock)
